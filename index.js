@@ -16,7 +16,6 @@ if (!WEBAPP_URL) {
 }
 
 // ------------------- Память сделок -------------------
-// Здесь сделки живут, пока Railway-контейнер не перезапущен
 /**
  * deal:
  * {
@@ -377,7 +376,7 @@ const html = `<!DOCTYPE html>
       if (envInfo) envInfo.textContent = 'Открыто внутри Telegram WebApp ✔';
     } else {
       const envInfo = document.getElementById('envInfo');
-      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Открой её через бота в Telegram.';
+      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Всё равно можно тестировать.';
     }
 
     function getQueryParam(key) {
@@ -446,7 +445,7 @@ const html = `<!DOCTYPE html>
       modalBackdrop.style.display = 'none';
     }
 
-    // ---------- создание сделки (всё через API, без tg.sendData) ----------
+    // ---------- создание сделки (без проверки tg/initUser) ----------
 
     document.getElementById('btnCreate').addEventListener('click', async () => {
       const otherUsername = document.getElementById('otherUsername').value.trim();
@@ -460,13 +459,6 @@ const html = `<!DOCTYPE html>
         return;
       }
 
-      if (!tg || !initUser) {
-        createStatus.style.display = 'block';
-        createStatus.style.color = '#f97316';
-        createStatus.textContent = 'Открой мини-приложение через бота в Telegram, чтобы создать сделку.';
-        return;
-      }
-
       try {
         const res = await fetch('/api/deal', {
           method: 'POST',
@@ -475,10 +467,7 @@ const html = `<!DOCTYPE html>
             otherUsername,
             giftFromA,
             giftFromB,
-            user: {
-              id: initUser.id,
-              username: initUser.username || ''
-            }
+            user: initUser ? { id: initUser.id, username: initUser.username || '' } : null
           })
         });
 
@@ -503,7 +492,7 @@ const html = `<!DOCTYPE html>
         openModal({
           title: 'Сделка создана',
           text: 'Отправь эту ссылку второму участнику, чтобы он присоединился к сделке.',
-          sub: 'Скопируй ссылку и перекинь её другу. Сделка уже сохранена на сервере — она не пропадёт.',
+          sub: 'Сделка уже сохранена на сервере и не пропадёт, если ты выйдешь из приложения.',
           link,
           primaryText: 'Дальше',
           onPrimary: () => {
@@ -540,21 +529,12 @@ const html = `<!DOCTYPE html>
         return;
       }
 
-      if (!tg || !initUser) {
-        confirmWarning.style.display = 'block';
-        confirmWarning.textContent = 'Открой эту страницу через бота в Telegram, чтобы подтвердить сделку.';
-        return;
-      }
-
       try {
         const res = await fetch('/api/deal/' + encodeURIComponent(dealIdFromUrl) + '/confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            user: {
-              id: initUser.id,
-              username: initUser.username || ''
-            }
+            user: initUser ? { id: initUser.id, username: initUser.username || '' } : null
           })
         });
 
@@ -585,22 +565,24 @@ const html = `<!DOCTYPE html>
         const creatorTag = deal.creatorUsername ? '@' + deal.creatorUsername : 'создатель';
         const otherTag = deal.otherUsername ? '@' + deal.otherUsername : 'второй участник';
 
-        const youAreCreator =
-          initUser && initUser.username &&
-          initUser.username.toLowerCase() === (deal.creatorUsername || '').toLowerCase();
-
-        const otherSide = youAreCreator ? otherTag : creatorTag;
+        // если у нас нет initUser, просто показываем общую фразу
+        const otherSide = creatorTag + ' / ' + otherTag;
 
         openModal({
           title: 'Начать сделку',
-          text: myTag + ', ты присоединился(ась) к сделке с ' + otherSide + '.',
-          sub: 'Дальше следуйте договорённостям: подарки переводятся вручную, а здесь вы просто фиксируете факт обмена.',
+          text: myTag + ', ты находишься в сделке между ' + creatorTag + ' и ' + otherTag + '.',
+          sub: 'Следуйте договорённостям: подарки переводятся вручную, а здесь вы просто фиксируете факт обмена.',
           primaryText: 'Понятно',
           onPrimary: () => closeModal()
         });
       } catch (e) {
         console.error(e);
       }
+    }
+
+    // вызываем, если режим confirm
+    if (mode === 'confirm' && dealIdFromUrl) {
+      loadDealAndShowJoinModal(dealIdFromUrl);
     }
   </script>
 </body>
@@ -620,14 +602,13 @@ app.get('/', (req, res) => {
 // создать сделку
 app.post('/api/deal', (req, res) => {
   const { otherUsername, giftFromA, giftFromB, user } = req.body || {};
-  if (!user || !user.id) return res.status(400).json({ error: 'no_user' });
 
   const id = 'deal_' + Date.now().toString(36);
 
   const deal = {
     id,
-    creatorId: user.id,
-    creatorUsername: user.username || ('id' + user.id),
+    creatorId: user && user.id ? user.id : null,
+    creatorUsername: user && user.username ? user.username : 'user',
     otherUsername: (otherUsername || '').replace('@', ''),
     giftFromA: giftFromA || '',
     giftFromB: giftFromB || '',
@@ -656,7 +637,7 @@ app.get('/api/deal/:id', (req, res) => {
   });
 });
 
-// отметка "создатель отправил подарок на поддержку"
+// отметка "создатель отправил подарок"
 app.post('/api/deal/:id/creator-sent', (req, res) => {
   const deal = deals.get(req.params.id);
   if (!deal) return res.status(404).json({ error: 'not_found' });
@@ -664,7 +645,7 @@ app.post('/api/deal/:id/creator-sent', (req, res) => {
   res.json({ ok: true });
 });
 
-// подтверждение получения вторым участником
+// подтверждение получения
 app.post('/api/deal/:id/confirm', (req, res) => {
   const deal = deals.get(req.params.id);
   if (!deal) return res.status(404).json({ error: 'not_found' });
@@ -705,7 +686,7 @@ bot.start((ctx) => {
   });
 });
 
-// никаких web_app_data, никаких sendMessage в поддержку — всё в WebApp
+// Бот больше НИЧЕГО не обрабатывает, вся логика — в WebApp
 bot.launch();
 console.log('🤖 Telegram bot запущен');
 
