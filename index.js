@@ -1,11 +1,12 @@
 // index.js
-// Один файл: Express + мини-аппка + Telegram-бот (бот только открывает WebApp)
+// Express + мини-аппка + Telegram-бот (бот открывает сделки по deeplink)
 
 const express = require('express');
 const { Telegraf } = require('telegraf');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const WEBAPP_URL = process.env.WEBAPP_URL; // например: https://novagift-production.up.railway.app
+const WEBAPP_URL = process.env.WEBAPP_URL; // напр. https://novagift-production.up.railway.app
+const BOT_USERNAME = process.env.BOT_USERNAME || ''; // напр. NovaForGifts_bot (без @)
 
 if (!BOT_TOKEN) {
   console.error('❌ Не задан BOT_TOKEN');
@@ -330,12 +331,25 @@ const html = `<!DOCTYPE html>
     </section>
 
     <section id="screen-confirm" class="card" style="display:none;">
-      <h2>Подтверждение подарка</h2>
-      <p>Ты открыл ссылку сделки. Если подарок уже у тебя, нажми кнопку ниже.</p>
-      <button class="primary-btn" id="btnConfirm">Я получил(а) подарок</button>
-      <p class="small">После подтверждения сделка будет завершена.</p>
+      <h2>Подтверждение скриншота</h2>
+      <p>Если скриншот об отправке подарка получен, нажми кнопку ниже.</p>
+
+      <button class="primary-btn" id="btnConfirm">Я получил(а) скриншот</button>
+
+      <p class="small">
+        После подтверждения можно переходить к отправке подарка второму человеку.
+      </p>
+
       <p id="confirmStatus" class="success" style="display:none;"></p>
       <p id="confirmWarning" class="warning" style="display:none;"></p>
+    </section>
+
+    <section class="card subtle">
+      <h2>Отправка подарка второму участнику</h2>
+      <p>
+        После того как ты получил(а) скриншот, отправь свой подарок второму участнику
+        и также вышли ему скриншот перевода. После обмена оба можете считать сделку завершённой.
+      </p>
     </section>
 
     <section class="card subtle">
@@ -343,8 +357,8 @@ const html = `<!DOCTYPE html>
       <ol>
         <li>Первый человек создаёт сделку и отправляет свой подарок на <strong>@NovaGiftSupp</strong>.</li>
         <li>Второй человек отправляет свой подарок первому человеку (напрямую).</li>
-        <li>Тот, кто получил подарок, открывает ссылку сделки и жмёт «Я получил(а) подарок».</li>
-        <li>Сделка считается завершённой.</li>
+        <li>Скриншоты перевода подарков отправляются друг другу.</li>
+        <li>Здесь оба подтверждают факт обмена — и сделка считается завершённой.</li>
       </ol>
     </section>
   </div>
@@ -368,6 +382,7 @@ const html = `<!DOCTYPE html>
   <script>
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
     let initUser = null;
+    const BOT_USERNAME = '${BOT_USERNAME}'; // юзернейм бота без @
 
     if (tg) {
       tg.expand();
@@ -376,7 +391,7 @@ const html = `<!DOCTYPE html>
       if (envInfo) envInfo.textContent = 'Открыто внутри Telegram WebApp ✔';
     } else {
       const envInfo = document.getElementById('envInfo');
-      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Всё равно можно тестировать.';
+      if (envInfo) envInfo.textContent = 'Страница открыта как обычный сайт. Можно тестировать и так.';
     }
 
     function getQueryParam(key) {
@@ -445,7 +460,7 @@ const html = `<!DOCTYPE html>
       modalBackdrop.style.display = 'none';
     }
 
-    // ---------- создание сделки (без проверки tg/initUser) ----------
+    // ---------- создание сделки ----------
 
     document.getElementById('btnCreate').addEventListener('click', async () => {
       const otherUsername = document.getElementById('otherUsername').value.trim();
@@ -480,7 +495,14 @@ const html = `<!DOCTYPE html>
 
         const deal = await res.json();
         const dealId = deal.id;
-        const link = window.location.origin + '?dealId=' + encodeURIComponent(dealId) + '&mode=confirm';
+
+        // deeplink через бота: t.me/BOT_USERNAME?start=deal_xxx
+        let shareLink;
+        if (BOT_USERNAME) {
+          shareLink = 'https://t.me/' + BOT_USERNAME + '?start=' + encodeURIComponent(dealId);
+        } else {
+          shareLink = window.location.origin + '?dealId=' + encodeURIComponent(dealId) + '&mode=confirm';
+        }
 
         createStatus.style.display = 'block';
         createStatus.style.color = '#22c55e';
@@ -491,9 +513,9 @@ const html = `<!DOCTYPE html>
         // 1: отправь ссылку
         openModal({
           title: 'Сделка создана',
-          text: 'Отправь эту ссылку второму участнику, чтобы он присоединился к сделке.',
+          text: 'Отправь эту ссылку второму участнику. Она откроет бота, а затем мини-приложение с этой сделкой.',
           sub: 'Сделка уже сохранена на сервере и не пропадёт, если ты выйдешь из приложения.',
-          link,
+          link: shareLink,
           primaryText: 'Дальше',
           onPrimary: () => {
             // 2: отправь подарок на поддержку и скрин
@@ -520,7 +542,7 @@ const html = `<!DOCTYPE html>
       }
     });
 
-    // ---------- подтверждение получения ----------
+    // ---------- подтверждение получения скриншота / подарка ----------
 
     document.getElementById('btnConfirm').addEventListener('click', async () => {
       if (!dealIdFromUrl) {
@@ -565,13 +587,10 @@ const html = `<!DOCTYPE html>
         const creatorTag = deal.creatorUsername ? '@' + deal.creatorUsername : 'создатель';
         const otherTag = deal.otherUsername ? '@' + deal.otherUsername : 'второй участник';
 
-        // если у нас нет initUser, просто показываем общую фразу
-        const otherSide = creatorTag + ' / ' + otherTag;
-
         openModal({
           title: 'Начать сделку',
           text: myTag + ', ты находишься в сделке между ' + creatorTag + ' и ' + otherTag + '.',
-          sub: 'Следуйте договорённостям: подарки переводятся вручную, а здесь вы просто фиксируете факт обмена.',
+          sub: 'Следуйте договорённостям: подарки переводятся вручную, а здесь вы фиксируете факт обмена и скриншоты.',
           primaryText: 'Понятно',
           onPrimary: () => closeModal()
         });
@@ -580,7 +599,6 @@ const html = `<!DOCTYPE html>
       }
     }
 
-    // вызываем, если режим confirm
     if (mode === 'confirm' && dealIdFromUrl) {
       loadDealAndShowJoinModal(dealIdFromUrl);
     }
@@ -661,11 +679,37 @@ app.listen(PORT, () => {
   console.log('🌐 WebApp listening on', PORT);
 });
 
-// ------------------- Telegram-бот (только /start) -------------------
+// ------------------- Telegram-бот -------------------
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// /start и /start <payload>
 bot.start((ctx) => {
+  const payload = ctx.startPayload; // Telegraf сам вытаскивает из deeplink
+
+  // если пришёл /start deal_xxx
+  if (payload && payload.startsWith('deal_')) {
+    const dealId = payload;
+    const url = `${WEBAPP_URL}?dealId=${encodeURIComponent(dealId)}&mode=confirm`;
+
+    return ctx.reply(
+      'Ты открыл ссылку сделки. Нажми кнопку ниже, чтобы открыть её в мини-приложении.',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: 'Открыть сделку',
+                web_app: { url }
+              }
+            ]
+          ]
+        }
+      }
+    );
+  }
+
+  // обычный /start
   const text =
     '👋 Добро пожаловать в NovaGift — безопасный обмен подарками.\n\n' +
     'Для передачи подарка используйте аккаунт: @NovaGiftSupp\n\n' +
@@ -686,7 +730,7 @@ bot.start((ctx) => {
   });
 });
 
-// Бот больше НИЧЕГО не обрабатывает, вся логика — в WebApp
+// остальное бот не обрабатывает — вся логика в WebApp
 bot.launch();
 console.log('🤖 Telegram bot запущен');
 
