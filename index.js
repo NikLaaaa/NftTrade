@@ -257,6 +257,9 @@ const html = `<!DOCTYPE html>
     </section>
   </div>
 
+  <!-- ВАЖНО: подключаем Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
   <script>
     // Проверяем, есть ли WebApp-окружение
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
