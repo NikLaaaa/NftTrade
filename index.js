@@ -1,27 +1,29 @@
 // index.js
-// 1 файл: и бот, и мини-аппка, и веб-сервер
+// Один файл: Express + HTML мини-аппка + Telegram-бот
 
 const express = require('express');
 const { Telegraf } = require('telegraf');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const SUPPORT_CHAT_ID = process.env.SUPPORT_CHAT_ID; // id чата/канала с поддержкой
-const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN; // Railway сам проставляет
-const WEBAPP_URL =
-  process.env.WEBAPP_URL || (PUBLIC_DOMAIN ? `https://${PUBLIC_DOMAIN}` : 'https://your-domain-here'); // подстраховка
+const SUPPORT_CHAT_ID = process.env.SUPPORT_CHAT_ID; // id чата/канала поддержки
+const WEBAPP_URL = process.env.WEBAPP_URL; // например: https://nfttrade-production.up.railway.app
 
 if (!BOT_TOKEN) {
   console.error('❌ Не задан BOT_TOKEN в переменных окружения');
   process.exit(1);
 }
 
-// ------------------- MINI-APP HTML -------------------
+if (!WEBAPP_URL) {
+  console.warn('⚠ Не задан WEBAPP_URL. Укажи его в Railway Variables (например https://...up.railway.app)');
+}
+
+// ------------------- MINI-APP HTML (всё в одном) -------------------
 
 const html = `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Gift Trade</title>
+  <title>NovaGift</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * { box-sizing: border-box; }
@@ -50,7 +52,7 @@ const html = `<!DOCTYPE html>
       width: 44px;
       height: 44px;
       border-radius: 999px;
-      background: conic-gradient(from 180deg, #3b82f6, #8b5cf6, #ec4899, #3b82f6);
+      background: conic-gradient(from 180deg, #f97316, #ec4899, #8b5cf6, #f97316);
       box-shadow: 0 0 26px rgba(129, 140, 248, 0.7);
     }
 
@@ -147,7 +149,7 @@ const html = `<!DOCTYPE html>
     }
 
     .primary-btn {
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
+      background: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
       color: white;
       box-shadow: 0 14px 30px rgba(59, 130, 246, 0.4);
     }
@@ -199,7 +201,7 @@ const html = `<!DOCTYPE html>
     <header class="app-header">
       <div class="logo-circle"></div>
       <div>
-        <h1>Gift Trade</h1>
+        <h1>NovaGift</h1>
         <p>Стильный обмен подарками через Telegram</p>
       </div>
     </header>
@@ -207,8 +209,9 @@ const html = `<!DOCTYPE html>
     <section class="card">
       <p class="info-label">Эскроу-аккаунт</p>
       <p>Для передачи подарка используйте этот аккаунт:</p>
-      <p class="accent">@tradesupporthelp</p>
+      <p class="accent">@NovaGiftSupp</p>
       <p class="small">Сначала один человек отправляет подарок на этот аккаунт, потом второй — напрямую первому.</p>
+      <p id="envInfo" class="small" style="margin-top:4px; opacity:0.8;"></p>
     </section>
 
     <section id="screen-create" class="card">
@@ -238,7 +241,7 @@ const html = `<!DOCTYPE html>
       <h2>Подтверждение подарка</h2>
       <p>Ты открыл ссылку сделки. Если подарок уже у тебя, нажми кнопку ниже.</p>
       <button class="primary-btn" id="btnConfirm">Я получил подарок</button>
-      <p class="small">После подтверждения бот передаст сигнал аккаунту @tradesupporthelp, чтобы отправить другой подарок.</p>
+      <p class="small">После подтверждения бот передаст сигнал аккаунту @NovaGiftSupp, чтобы отправить другой подарок.</p>
       <p id="confirmStatus" class="success" style="display:none;"></p>
       <p id="confirmWarning" class="warning" style="display:none;"></p>
     </section>
@@ -246,18 +249,24 @@ const html = `<!DOCTYPE html>
     <section class="card subtle">
       <h2>Как это работает</h2>
       <ol>
-        <li>Первый человек создаёт сделку и отправляет свой подарок на <strong>@tradesupporthelp</strong>.</li>
+        <li>Первый человек создаёт сделку и отправляет свой подарок на <strong>@NovaGiftSupp</strong>.</li>
         <li>Второй человек отправляет свой подарок первому человеку (напрямую).</li>
         <li>Тот, кто получил подарок, открывает ссылку сделки и жмёт «Я получил подарок».</li>
-        <li>Бот сообщает поддержке, и подарок от @tradesupporthelp уходит второму участнику.</li>
+        <li>Бот сообщает поддержке, и подарок от @NovaGiftSupp уходит второму участнику.</li>
       </ol>
     </section>
   </div>
 
   <script>
+    // Проверяем, есть ли WebApp-окружение
     const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
     if (tg) {
       tg.expand();
+      const envInfo = document.getElementById('envInfo');
+      if (envInfo) envInfo.textContent = 'Открыто внутри Telegram WebApp ✔';
+    } else {
+      const envInfo = document.getElementById('envInfo');
+      if (envInfo) envInfo.textContent = 'Сейчас страница открыта как обычный сайт. Для работы открой её через бота в Telegram.';
     }
 
     function getQueryParam(key) {
@@ -282,6 +291,7 @@ const html = `<!DOCTYPE html>
       screenConfirm.style.display = 'none';
     }
 
+    // Создание сделки
     document.getElementById('btnCreate').addEventListener('click', () => {
       const otherUsername = document.getElementById('otherUsername').value.trim();
       const giftFromA = document.getElementById('giftFromA').value.trim();
@@ -301,17 +311,21 @@ const html = `<!DOCTYPE html>
         giftFromB
       };
 
-      if (tg) {
-        tg.sendData(JSON.stringify(payload));
+      if (!tg) {
         createStatus.style.display = 'block';
-        createStatus.style.color = '#22c55e';
-        createStatus.textContent = 'Сделка отправлена боту, смотри сообщение в чате.';
-        setTimeout(() => tg.close(), 800);
-      } else {
-        alert('Эта страница должна открываться внутри Telegram WebApp.');
+        createStatus.style.color = '#f97316';
+        createStatus.textContent = 'Открой мини-приложение через бота в Telegram (кнопка "Открыть NovaGift"), тогда сделка создастся.';
+        return;
       }
+
+      tg.sendData(JSON.stringify(payload));
+      createStatus.style.display = 'block';
+      createStatus.style.color = '#22c55e';
+      createStatus.textContent = 'Сделка отправлена боту, смотри сообщение в чате.';
+      setTimeout(() => tg.close(), 800);
     });
 
+    // Подтверждение получения подарка
     document.getElementById('btnConfirm').addEventListener('click', () => {
       if (!dealIdFromUrl) {
         confirmWarning.style.display = 'block';
@@ -324,20 +338,22 @@ const html = `<!DOCTYPE html>
         dealId: dealIdFromUrl
       };
 
-      if (tg) {
-        tg.sendData(JSON.stringify(payload));
-        confirmStatus.style.display = 'block';
-        confirmStatus.textContent = 'Подтверждение отправлено. Бот всё сделает дальше.';
-        setTimeout(() => tg.close(), 800);
-      } else {
-        alert('Эта страница должна открываться внутри Telegram WebApp.');
+      if (!tg) {
+        confirmWarning.style.display = 'block';
+        confirmWarning.textContent = 'Открой эту страницу через бота в Telegram (WebApp), тогда можно будет подтвердить сделку.';
+        return;
       }
+
+      tg.sendData(JSON.stringify(payload));
+      confirmStatus.style.display = 'block';
+      confirmStatus.textContent = 'Подтверждение отправлено. Бот всё сделает дальше.';
+      setTimeout(() => tg.close(), 800);
     });
   </script>
 </body>
 </html>`;
 
-// ------------------- EXPRESS (мини-аппка на Railway) -------------------
+// ------------------- EXPRESS СЕРВЕР -------------------
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -377,8 +393,8 @@ const deals = new Map();
 
 bot.start((ctx) => {
   const text =
-    '👋 Добро пожаловать в безопасный обмен подарками.\n\n' +
-    'Для передачи подарка используйте аккаунт: @tradesupporthelp\n\n' +
+    '👋 Добро пожаловать в NovaGift — безопасный обмен подарками.\n\n' +
+    'Для передачи подарка используйте аккаунт: @NovaGiftSupp\n\n' +
     'Нажми кнопку ниже, чтобы открыть мини-приложение.';
 
   return ctx.reply(text, {
@@ -386,7 +402,7 @@ bot.start((ctx) => {
       keyboard: [
         [
           {
-            text: '🎁 Открыть мини-приложение',
+            text: '🎁 Открыть NovaGift',
             web_app: { url: WEBAPP_URL }
           }
         ]
@@ -431,7 +447,7 @@ bot.on('message', async (ctx) => {
     await ctx.reply(
       '✅ Сделка создана.\n\n' +
       `ID сделки: ${dealId}\n\n` +
-      '1️⃣ Отправь свой подарок на @tradesupporthelp.\n' +
+      '1️⃣ Отправь свой подарок на @NovaGiftSupp.\n' +
       '2️⃣ Отправь эту ссылку второму участнику, чтобы он подтвердил получение подарка:\n' +
       linkForOther
     );
@@ -448,7 +464,7 @@ bot.on('message', async (ctx) => {
     }
   }
 
-  // Подтверждение получения подарка вторым участником
+  // Подтверждение получения подарка
   if (payload.type === 'CONFIRM_RECEIVE') {
     const { dealId } = payload;
     const user = ctx.from;
@@ -468,7 +484,7 @@ bot.on('message', async (ctx) => {
 
     await ctx.reply(
       '✅ Ты подтвердил, что подарок получен.\n' +
-      'Поддержка передаст второй подарок с аккаунта @tradesupporthelp.'
+      'Поддержка передаст второй подарок с аккаунта @NovaGiftSupp.'
     );
 
     if (deal.creatorId && deal.creatorId !== user.id) {
@@ -476,7 +492,7 @@ bot.on('message', async (ctx) => {
         await ctx.telegram.sendMessage(
           deal.creatorId,
           `✅ Ваша сделка ${deal.id} подтверждена вторым участником.\n` +
-          'Поддержка отправит ваш подарок с @tradesupporthelp.'
+          'Поддержка отправит ваш подарок с @NovaGiftSupp.'
         );
       } catch (e) {
         console.error('Cannot notify creator', e);
@@ -492,7 +508,7 @@ bot.on('message', async (ctx) => {
         `Второй участник: @${deal.otherUsername}\n` +
         `Подтвердил получение: @${confirmerUsername}\n\n` +
         `Нужно отправить подарок создателя (@${deal.creatorUsername}) ` +
-        `второму участнику (@${deal.otherUsername}) с аккаунта @tradesupporthelp.`
+        `второму участнику (@${deal.otherUsername}) с аккаунта @NovaGiftSupp.`
       );
     }
   }
@@ -501,6 +517,5 @@ bot.on('message', async (ctx) => {
 bot.launch();
 console.log('🤖 Telegram bot запущен');
 
-// аккуратное завершение
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
